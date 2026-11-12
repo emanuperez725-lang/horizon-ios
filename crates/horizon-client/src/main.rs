@@ -21,6 +21,26 @@ fn main() {
     } else {
         (logging::game_home(), "client", "Render thread")
     };
+    // iOS starts an app in `/`, which it can't write to: the game folder (options, saves, the
+    // prepared resources) is the home in Documents.
+    #[cfg(target_os = "ios")]
+    {
+        let _ = std::fs::create_dir_all(&home);
+        let _ = std::env::set_current_dir(&home);
+        // A phone's memory: the first start's options are small. The player can raise them.
+        for (file, text) in [
+            (
+                "options.txt",
+                "renderDistance:4\nsimulationDistance:5\nmaxFps:60\nrenderClouds:\"false\"\n\
+                 particles:1\nentityShadows:false\nbiomeBlendRadius:0\nmipmapLevels:2\n",
+            ),
+            ("horizon-graphics.txt", "workers:2\nentityCulling:true\n"),
+        ] {
+            if !home.join(file).exists() {
+                let _ = std::fs::write(home.join(file), text);
+            }
+        }
+    }
     if !help {
         logging::init(&home, thread);
         // The log's first line names the build, so a bug report that carries the log says which one it was.

@@ -50,8 +50,8 @@ rustix = { version = "1", default-features = false, features = ["std", "time"] }
 [target.'cfg(windows)'.dependencies]
 wgpu = { version = "30.0.1", default-features = false, features = ["dx12"] }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+wgpu ={ version = "30.0.1", default-features = false, features = ["gles"] }
 
 [features]
 # Sound output: horizon-client's `audio` feature.

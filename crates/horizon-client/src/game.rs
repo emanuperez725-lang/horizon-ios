@@ -195,6 +195,7 @@ mod text_displays;
 mod titles;
 mod tnt;
 mod totem;
+mod touch;
 mod trading;
 mod trial_spawner;
 mod trial_visuals;
@@ -354,6 +355,10 @@ impl Options {
         let mut o = Self {
             resources: if sibling.join("horizon-resources.json").exists() {
                 sibling
+            } else if cfg!(target_os = "ios") {
+                // Files shows no dot folders: the player copies the prepared resources to
+                // `resources` in the game folder (Documents/horizon).
+                "resources".into()
             } else {
                 std::path::Path::new(".local/horizon-client").join(horizon_core::VANILLA_VERSION)
             },
@@ -1575,6 +1580,8 @@ struct Game<'a> {
     last_input: Instant,
     /// Controllers (Horizon's own).
     pad: pad::Pads,
+    /// Touch controls (Horizon's own).
+    touch: touch::Touches,
     frames: u64,
     /// `item_level` for one frame, game time, day time and dimension.
     item_level_cache: std::cell::RefCell<
@@ -5958,10 +5965,12 @@ impl Game<'_> {
             // so everywhere else warp after grabbing.
             #[cfg(target_os = "macos")]
             warp(window);
+            // iOS has no pointer to grab: touches turn the view (game/touch.rs).
             self.captured = window
                 .set_cursor_grab(CursorGrabMode::Locked)
                 .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
-                .is_ok();
+                .is_ok()
+                || cfg!(target_os = "ios");
             #[cfg(not(target_os = "macos"))]
             if self.captured && self.focused {
                 warp(window);
@@ -6288,6 +6297,7 @@ impl Game<'_> {
             self.draw_boss_bars(&mut batch);
             self.draw_extras(&mut batch);
             self.draw_mod_shapes(&mut batch);
+            self.draw_touch(&mut batch);
         }
         if show_hud {
             // Hud.nextContextualInfoState: the jump bar, the experience bar or
@@ -13041,6 +13051,15 @@ impl ApplicationHandler for Game<'_> {
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
             attributes, "horizon", "horizon",
         );
+        // A phone held sideways, with nothing of the system's over the game.
+        #[cfg(target_os = "ios")]
+        let attributes = {
+            use winit::platform::ios::{ValidOrientations, WindowAttributesExtIOS};
+            attributes
+                .with_valid_orientations(ValidOrientations::Landscape)
+                .with_prefers_status_bar_hidden(true)
+                .with_prefers_home_indicator_hidden(true)
+        };
         let window = match event_loop.create_window(
             attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
@@ -13071,6 +13090,13 @@ impl ApplicationHandler for Game<'_> {
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, mut event: WindowEvent) {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
+            return;
+        }
+        // Only where touch is the one input: a desktop touchscreen also sends mouse events.
+        if cfg!(target_os = "ios")
+            && let WindowEvent::Touch(touch) = &event
+        {
+            self.touch(event_loop, id, touch);
             return;
         }
         follow_keymap(&mut event);
@@ -14129,6 +14155,9 @@ impl ApplicationHandler for Game<'_> {
         if self.pending_save.is_some() {
             return;
         }
+        if let Err(e) = self.touch_frame() {
+            log::warn!("Horizon: touch: {e}");
+        }
         self.poll_pads(event_loop);
         self.pause_if_inactive();
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
@@ -14321,6 +14350,7 @@ impl<'a> Game<'a> {
             previous: now,
             last_input: now,
             pad: Default::default(),
+            touch: Default::default(),
             frames: 0,
             item_level_cache: Default::default(),
             world_frames: 0,
@@ -15604,6 +15634,15 @@ impl Loading {
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
             attributes, "horizon", "horizon",
         );
+        // A phone held sideways, with nothing of the system's over the game.
+        #[cfg(target_os = "ios")]
+        let attributes = {
+            use winit::platform::ios::{ValidOrientations, WindowAttributesExtIOS};
+            attributes
+                .with_valid_orientations(ValidOrientations::Landscape)
+                .with_prefers_status_bar_hidden(true)
+                .with_prefers_home_indicator_hidden(true)
+        };
         let window = match event_loop.create_window(
             attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
@@ -15637,6 +15676,15 @@ impl Loading {
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, mut event: WindowEvent) {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
+            return;
+        }
+        // iOS: a finger is the loading screen's mouse (game/touch.rs).
+        if cfg!(target_os = "ios")
+            && let WindowEvent::Touch(touch) = &event
+        {
+            for event in touch::as_mouse(touch) {
+                self.window_event(event_loop, id, event);
+            }
             return;
         }
         follow_keymap(&mut event);
@@ -15985,6 +16033,8 @@ pub fn run() -> Result<()> {
         && !options.offscreen
         && options.frames.is_none()
         && options.world_frames.is_none()
+        // The iOS port is not an official build: it stays out of the launcher's count.
+        && !cfg!(target_os = "ios")
     {
         horizon_client::heartbeat::start();
         if let Err(e) = horizon_client::multiplayer::add_official_server(&std::env::current_dir()?)
